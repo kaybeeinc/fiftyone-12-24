@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024, Voxel51, Inc.
+ * Copyright 2017-2025, Voxel51, Inc.
  */
 
 import type { ImageState } from "../state";
@@ -54,7 +54,6 @@ export class ImageElement extends BaseElement<ImageState, HTMLImageElement> {
 
   createHTMLElement() {
     const element = new Image();
-    element.crossOrigin = "Anonymous";
     element.loading = "eager";
     return element;
   }

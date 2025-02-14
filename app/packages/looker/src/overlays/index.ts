@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024, Voxel51, Inc.
+ * Copyright 2017-2025, Voxel51, Inc.
  */
 import {
   DYNAMIC_EMBEDDED_DOCUMENT_FIELD,
@@ -84,7 +84,7 @@ const EMBEDDED_FIELDS = Object.freeze(
   new Set([EMBEDDED_DOCUMENT_FIELD, DYNAMIC_EMBEDDED_DOCUMENT_FIELD])
 );
 
-const accumulateOverlays = <State extends BaseState>(
+export const accumulateOverlays = <State extends BaseState>(
   data: {
     [key: string]: any;
   },

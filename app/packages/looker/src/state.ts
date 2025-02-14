@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024, Voxel51, Inc.
+ * Copyright 2017-2025, Voxel51, Inc.
  */
 
 import { BufferManager } from "@fiftyone/utilities";
@@ -86,6 +86,7 @@ export type Sample = {
   _id: string;
   id: string;
   filepath: string;
+  frames?: Sample[];
   tags: string[];
   _label_tags: string[];
   _media_type: "image" | "video" | "point-cloud" | "3d";

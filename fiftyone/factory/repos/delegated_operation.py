@@ -1,7 +1,7 @@
 """
 FiftyOne delegated operation repository.
 
-| Copyright 2017-2024, Voxel51, Inc.
+| Copyright 2017-2025, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -44,6 +44,7 @@ class DelegatedOperationRepo(object):
         run_state: ExecutionRunState,
         result: ExecutionResult = None,
         run_link: str = None,
+        log_path: str = None,
         progress: ExecutionProgress = None,
         required_state: ExecutionRunState = None,
     ) -> DelegatedOperationDocument:
@@ -117,6 +118,14 @@ class DelegatedOperationRepo(object):
         """Sets the label for the delegated operation."""
         raise NotImplementedError("subclass must implement set_label()")
 
+    def set_log_upload_error(
+        self, _id: ObjectId, log_upload_error: str
+    ) -> DelegatedOperationDocument:
+        """Sets the log upload error for the delegated operation."""
+        raise NotImplementedError(
+            "subclass must implement set_log_upload_error()"
+        )
+
     def get(self, _id: ObjectId) -> DelegatedOperationDocument:
         """Get an operation by id."""
         raise NotImplementedError("subclass must implement get()")
@@ -164,6 +173,13 @@ class MongoDelegatedOperationRepo(DelegatedOperationRepo):
             indices_to_create.append(
                 IndexModel(
                     [("run_state", pymongo.ASCENDING)], name="run_state_1"
+                )
+            )
+
+        if "dataset_id_1" not in index_names:
+            indices_to_create.append(
+                IndexModel(
+                    [("dataset_id", pymongo.ASCENDING)], name="dataset_id_1"
                 )
             )
 
@@ -239,12 +255,23 @@ class MongoDelegatedOperationRepo(DelegatedOperationRepo):
         )
         return DelegatedOperationDocument().from_pymongo(doc)
 
+    def set_log_upload_error(
+        self, _id: ObjectId, log_upload_error: str
+    ) -> DelegatedOperationDocument:
+        doc = self._collection.find_one_and_update(
+            filter={"_id": _id},
+            update={"$set": {"log_upload_error": log_upload_error}},
+            return_document=pymongo.ReturnDocument.AFTER,
+        )
+        return DelegatedOperationDocument().from_pymongo(doc)
+
     def update_run_state(
         self,
         _id: ObjectId,
         run_state: ExecutionRunState,
         result: ExecutionResult = None,
         run_link: str = None,
+        log_path: str = None,
         progress: ExecutionProgress = None,
         required_state: ExecutionRunState = None,
     ) -> DelegatedOperationDocument:
@@ -314,6 +341,9 @@ class MongoDelegatedOperationRepo(DelegatedOperationRepo):
 
         if run_link is not None:
             update["$set"]["run_link"] = run_link
+
+        if log_path is not None:
+            update["$set"]["log_path"] = log_path
 
         if update is None:
             raise ValueError("Invalid run_state: {}".format(run_state))

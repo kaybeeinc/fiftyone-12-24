@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024, Voxel51, Inc.
+ * Copyright 2017-2025, Voxel51, Inc.
  */
 
 import {
@@ -71,7 +71,6 @@ export class ThreeDElement extends BaseElement<ThreeDState, HTMLImageElement> {
 
     this.element = new Image();
     this.element.loading = "eager";
-    this.element.crossOrigin = "Anonymous";
     if (this.isOpmAvailable) {
       this.element.setAttribute("src", src);
     } else {

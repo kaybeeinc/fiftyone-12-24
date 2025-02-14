@@ -1,6 +1,5 @@
 import { useTheme } from "@fiftyone/components";
-import { AbstractLooker, ImaVidLooker } from "@fiftyone/looker";
-import { BaseState } from "@fiftyone/looker/src/state";
+import { ImaVidLooker } from "@fiftyone/looker";
 import { FoTimelineConfig, useCreateTimeline } from "@fiftyone/playback";
 import { useDefaultTimelineNameImperative } from "@fiftyone/playback/src/lib/use-default-timeline-name";
 import { Timeline } from "@fiftyone/playback/src/views/Timeline";
@@ -24,6 +23,7 @@ import {
   useModalContext,
 } from "./hooks";
 import useKeyEvents from "./use-key-events";
+import { useImavidModalSelectiveRendering } from "./use-modal-selective-rendering";
 import { shortcutToHelpItems } from "./utils";
 
 interface ImaVidLookerReactProps {
@@ -37,6 +37,9 @@ export const ImaVidLookerReact = React.memo(
   ({ sample: sampleDataWithExtraParams }: ImaVidLookerReactProps) => {
     const [id] = useState(() => uuid());
     const colorScheme = useRecoilValue(fos.colorScheme);
+    const dynamicGroupsTargetFrameRate = useRecoilValue(
+      fos.dynamicGroupsTargetFrameRate
+    );
 
     const { sample } = sampleDataWithExtraParams;
 
@@ -55,12 +58,12 @@ export const ImaVidLookerReact = React.memo(
 
     const { activeLookerRef, setActiveLookerRef } = useModalContext();
     const imaVidLookerRef =
-      activeLookerRef as unknown as React.MutableRefObject<ImaVidLooker>;
+      activeLookerRef as React.MutableRefObject<ImaVidLooker>;
 
     const looker = React.useMemo(
       () => createLooker.current(sampleDataWithExtraParams),
       [reset, createLooker, selectedMediaField]
-    ) as AbstractLooker<BaseState>;
+    ) as ImaVidLooker;
 
     useEffect(() => {
       setModalLooker(looker);
@@ -71,7 +74,7 @@ export const ImaVidLookerReact = React.memo(
 
     useEffect(() => {
       if (looker) {
-        setActiveLookerRef(looker as fos.Lookers);
+        setActiveLookerRef(looker);
       }
     }, [looker]);
 
@@ -192,8 +195,7 @@ export const ImaVidLookerReact = React.memo(
 
           window.addEventListener(
             "fetchMore",
-            fetchMoreListener as EventListener,
-            { once: true }
+            fetchMoreListener as EventListener
           );
         });
       },
@@ -219,8 +221,9 @@ export const ImaVidLookerReact = React.memo(
       }
 
       return {
-        totalFrames: totalFrameCount,
         loop: (looker as ImaVidLooker).options.loop,
+        targetFrameRate: dynamicGroupsTargetFrameRate,
+        totalFrames: totalFrameCount,
       } as FoTimelineConfig;
     }, [totalFrameCount, (looker as ImaVidLooker).options.loop]);
 
@@ -313,6 +316,8 @@ export const ImaVidLookerReact = React.memo(
 
       return () => clearInterval(intervalId);
     }, [looker]);
+
+    useImavidModalSelectiveRendering(id, looker);
 
     return (
       <div

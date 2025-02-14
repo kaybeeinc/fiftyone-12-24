@@ -1,7 +1,7 @@
 """
 FiftyOne delegated operation repository document.
 
-| Copyright 2017-2024, Voxel51, Inc.
+| Copyright 2017-2025, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -56,6 +56,8 @@ class DelegatedOperationDocument(object):
         self.id = None
         self._doc = None
         self.metadata = None
+        self.log_upload_error = None
+        self.log_path = None
 
     def from_pymongo(self, doc: dict):
         # required fields
@@ -72,6 +74,8 @@ class DelegatedOperationDocument(object):
         self.pinned = doc.get("pinned", None)
         self.dataset_id = doc.get("dataset_id", None)
         self.run_link = doc.get("run_link", None)
+        self.log_upload_error = doc.get("log_upload_error", None)
+        self.log_path = doc.get("log_path", None)
         self.metadata = doc.get("metadata", None)
         self.label = doc.get("label", None)
         self.updated_at = doc.get("updated_at", None)

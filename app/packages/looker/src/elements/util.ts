@@ -1,5 +1,5 @@
 /**
- * Copyright 2017-2024, Voxel51, Inc.
+ * Copyright 2017-2025, Voxel51, Inc.
  */
 
 import type { BaseState, StateUpdate } from "../state";
@@ -228,7 +228,6 @@ const makeAcquirer = (
 
       if (VIDEOS.length < maxVideos) {
         const video = document.createElement("video");
-        video.crossOrigin = "Anonymous";
         video.preload = "metadata";
         video.muted = true;
         video.loop = false;

@@ -1,11 +1,10 @@
 """
 Core plugin methods.
 
-| Copyright 2017-2024, Voxel51, Inc.
+| Copyright 2017-2025, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
-from collections import Counter
 from dataclasses import dataclass
 import json
 import logging
@@ -13,6 +12,7 @@ import os
 from packaging.requirements import Requirement
 import re
 import shutil
+from typing import Optional
 
 import yaml
 
@@ -26,7 +26,7 @@ import fiftyone.core.storage as fos
 import fiftyone.core.utils as fou
 from fiftyone.plugins.definitions import PluginDefinition
 from fiftyone.utils.github import GitHubRepository
-import fiftyone.plugins.constants as constants
+import fiftyone.plugins.constants as fpc
 
 PLUGIN_METADATA_FILENAMES = ("fiftyone.yml", "fiftyone.yaml")
 
@@ -44,18 +44,22 @@ class PluginPackage:
 
     name: str
     path: str
+    shadow_paths: Optional[list[str]] = None
 
     def __repr__(self):
         return f"Plugin(name={self.name}, path={self.path})"
 
 
-def list_plugins(enabled=True, include_builtin=False):
-    """Returns the definitions of available plugins.
+def list_plugins(enabled=True, builtin=False, shadowed=False):
+    """Lists available plugins.
 
     Args:
         enabled (True): whether to include only enabled plugins (True) or only
             disabled plugins (False) or all plugins ("all")
-        include_builtin (False): whether to include built-in plugins
+        builtin (False): whether to include only builtin plugins (True) or only
+            non-builtin plugins (False) or all plugins ("all")
+        shadowed (False): whether to include only "shadowed" duplicate plugins
+            (True) or only usable plugins (False) or all plugins ("all")
 
     Returns:
         a list of :class:`PluginDefinition` instances
@@ -63,31 +67,65 @@ def list_plugins(enabled=True, include_builtin=False):
     if enabled == "all":
         enabled = None
 
+    if builtin == "all":
+        builtin = None
+
+    if shadowed == "all":
+        shadowed = None
+
     plugins = []
-    for p in _list_plugins(enabled=enabled, include_builtin=include_builtin):
+    for p in _list_plugins(
+        enabled=enabled, builtin=builtin, shadowed=shadowed
+    ):
         try:
-            plugins.append(_load_plugin_definition(p))
+            plugins.append(_load_plugin_definition(plugin=p))
         except:
-            logger.debug(f"Failed to parse plugin at '{p.path}'")
+            logger.info(f"Failed to parse plugin at '{p.path}'")
 
     return plugins
 
 
-def enable_plugin(plugin_name):
+def enable_plugin(plugin_name, _allow_missing=False):
     """Enables the given plugin.
 
     Args:
         plugin_name: the plugin name
     """
+    try:
+        plugin = get_plugin(plugin_name)
+    except ValueError:
+        if not _allow_missing:
+            raise
+
+        plugin = None
+
+    if plugin is not None and plugin.builtin:
+        raise ValueError(
+            f"Cannot change enablement of builtin plugin '{plugin_name}'"
+        )
+
     _update_plugin_settings(plugin_name, enabled=True)
 
 
-def disable_plugin(plugin_name):
+def disable_plugin(plugin_name, _allow_missing=False):
     """Disables the given plugin.
 
     Args:
         plugin_name: the plugin name
     """
+    try:
+        plugin = get_plugin(plugin_name)
+    except ValueError:
+        if not _allow_missing:
+            raise
+
+        plugin = None
+
+    if plugin is not None and plugin.builtin:
+        raise ValueError(
+            f"Cannot change enablement of builtin plugin '{plugin_name}'"
+        )
+
     _update_plugin_settings(plugin_name, enabled=False)
 
 
@@ -97,9 +135,12 @@ def delete_plugin(plugin_name):
     Args:
         plugin_name: the plugin name
     """
-    plugin = _get_plugin(plugin_name)
+    plugin = get_plugin(plugin_name)
+    if plugin.builtin:
+        raise ValueError(f"Cannot delete builtin plugin '{plugin_name}'")
+
     _update_plugin_settings(plugin_name, delete=True)
-    etau.delete_dir(plugin.path)
+    etau.delete_dir(plugin.directory)
 
 
 def list_downloaded_plugins():
@@ -108,7 +149,8 @@ def list_downloaded_plugins():
     Returns:
         a list of plugin names
     """
-    return _list_plugins_by_name()
+    plugins = _list_plugins(builtin=False, shadowed=False)
+    return [p.name for p in plugins]
 
 
 def list_enabled_plugins():
@@ -117,7 +159,8 @@ def list_enabled_plugins():
     Returns:
         a list of plugin names
     """
-    return _list_plugins_by_name(enabled=True)
+    plugins = _list_plugins(enabled=True, builtin=False, shadowed=False)
+    return [p.name for p in plugins]
 
 
 def list_disabled_plugins():
@@ -126,20 +169,25 @@ def list_disabled_plugins():
     Returns:
         a list of plugin names
     """
-    return _list_plugins_by_name(enabled=False)
+    plugins = _list_plugins(enabled=False, builtin=False, shadowed=False)
+    return [p.name for p in plugins]
 
 
-def get_plugin(name):
+def get_plugin(name=None, plugin_dir=None):
     """Gets the definition for the given plugin.
 
     Args:
-        name: the plugin name
+        name (None): the plugin name
+        plugin_dir (None): a directory containing the plugin
 
     Returns:
         a :class:`PluginDefinition`
     """
+    if plugin_dir is not None:
+        return _load_plugin_definition(plugin_dir=plugin_dir)
+
     plugin = _get_plugin(name)
-    return _load_plugin_definition(plugin)
+    return _load_plugin_definition(plugin=plugin)
 
 
 def find_plugin(name):
@@ -200,9 +248,12 @@ def download_plugin(url_or_gh_repo, plugin_names=None, overwrite=False):
     elif plugin_names is not None:
         plugin_names = set(plugin_names)
 
-    existing_plugin_dirs = {p.name: p.path for p in _list_plugins()}
-
+    existing_plugins = {
+        p.name: p for p in list_plugins(enabled="all", builtin="all")
+    }
     downloaded_plugins = {}
+    skipped_plugins = set()
+
     with etau.TempDir() as tmpdir:
         root_dir = tmpdir
 
@@ -245,15 +296,21 @@ def download_plugin(url_or_gh_repo, plugin_names=None, overwrite=False):
                 logger.debug(f"Skipping unwanted plugin '{plugin.name}'")
                 continue
 
-            existing_dir = existing_plugin_dirs.get(plugin.name, None)
-            if existing_dir is not None:
+            existing_plugin = existing_plugins.get(plugin.name, None)
+            if existing_plugin is not None:
                 if not overwrite:
+                    skipped_plugins.add(plugin.name)
                     logger.info(f"Skipping existing plugin '{plugin.name}'")
                     continue
 
-                logger.debug(f"Overwriting existing plugin '{plugin.name}'")
-                etau.delete_dir(existing_dir)
-                plugin_dir = existing_dir
+                if existing_plugin.builtin:
+                    raise ValueError(
+                        f"Cannot overwrite builtin plugin '{plugin.name}'"
+                    )
+
+                logger.info(f"Overwriting existing plugin '{plugin.name}'")
+                plugin_dir = existing_plugin.directory
+                etau.delete_dir(plugin_dir)
             else:
                 plugin_dir = _recommend_plugin_dir(plugin.name)
 
@@ -262,7 +319,11 @@ def download_plugin(url_or_gh_repo, plugin_names=None, overwrite=False):
             downloaded_plugins[plugin.name] = plugin_dir
 
     if plugin_names is not None:
-        missing_plugins = set(plugin_names) - set(downloaded_plugins.keys())
+        missing_plugins = (
+            set(plugin_names)
+            - set(downloaded_plugins.keys())
+            - skipped_plugins
+        )
         if missing_plugins:
             logger.warning(f"Plugins not found: {missing_plugins}")
 
@@ -428,12 +489,20 @@ def create_plugin(
         the directory containing the created plugin
     """
     if outdir is None:
-        existing_plugin_dirs = {p.name: p.path for p in _list_plugins()}
-        if plugin_name in existing_plugin_dirs:
+        existing_plugins = {
+            p.name: p for p in list_plugins(enabled="all", builtin="all")
+        }
+        existing_plugin = existing_plugins.get(plugin_name, None)
+        if existing_plugin is not None:
             if not overwrite:
                 raise ValueError(f"Plugin '{plugin_name}' already exists")
 
-            plugin_dir = existing_plugin_dirs[plugin_name]
+            if existing_plugin.builtin:
+                raise ValueError(
+                    f"Cannot overwrite builtin plugin '{plugin_name}'"
+                )
+
+            plugin_dir = existing_plugin.directory
             logger.info(f"Overwriting existing plugin '{plugin_name}'")
         else:
             plugin_dir = os.path.join(fo.config.plugins_dir, plugin_name)
@@ -442,7 +511,7 @@ def create_plugin(
             raise ValueError(f"Directory '{outdir}' already exists")
 
         plugin_dir = outdir
-        logger.debug(f"Overwriting existing plugin at '{plugin_dir}'")
+        logger.info(f"Overwriting existing plugin at '{plugin_dir}'")
     else:
         plugin_dir = _recommend_plugin_dir(plugin_name)
         logger.info(f"Creating plugin at '{plugin_dir}'")
@@ -507,24 +576,29 @@ def _parse_plugin_metadata(metadata_path):
     return PluginPackage(plugin_name, plugin_path)
 
 
-def _list_plugins(enabled=None, include_builtin=False):
+def _list_plugins(enabled=None, builtin=None, shadowed=None):
+    plugin_paths = []
+
+    # Important: builtins are registered first for order of precedence
+    if builtin in (True, None):
+        plugin_paths.extend(
+            _iter_plugin_metadata_files(fpc.BUILTIN_PLUGINS_DIR)
+        )
+
+    if builtin in (False, None):
+        plugin_paths.extend(_iter_plugin_metadata_files())
+
     plugins = []
-    external_plugin_paths = list(_iter_plugin_metadata_files())
-    builtin_plugin_paths = list(
-        _iter_plugin_metadata_files(constants.BUILTIN_PLUGINS_DIR)
-    )
-    all_plugin_paths = (
-        (external_plugin_paths + builtin_plugin_paths)
-        if include_builtin
-        else external_plugin_paths
-    )
-    for metadata_path in all_plugin_paths:
+    for metadata_path in plugin_paths:
         try:
             plugin = _parse_plugin_metadata(metadata_path)
             plugins.append(plugin)
         except:
-            logger.debug(f"Failed to load plugin name from '{metadata_path}'")
+            logger.info(f"Failed to load plugin name from '{metadata_path}'")
             continue
+
+    # Important: shadowed plugins are handled before filtering by enablement
+    plugins = _handle_shadowed(plugins, shadowed=shadowed)
 
     disabled = set(_list_disabled_plugins())
 
@@ -537,15 +611,26 @@ def _list_plugins(enabled=None, include_builtin=False):
     return plugins
 
 
-def _list_plugins_by_name(enabled=None, check_for_duplicates=True):
-    plugin_names = [p.name for p in _list_plugins(enabled=enabled)]
+def _handle_shadowed(plugins, shadowed=None):
+    existing_plugins = {}
 
-    if check_for_duplicates:
-        dups = [n for n, c in Counter(plugin_names).items() if c > 1]
-        if dups:
-            raise ValueError(f"Found multiple plugins with name {dups}")
+    _plugins = []
+    for plugin in plugins:
+        existing_plugin = existing_plugins.get(plugin.name, None)
+        if existing_plugin is not None:
+            if existing_plugin.shadow_paths is None:
+                existing_plugin.shadow_paths = []
+            existing_plugin.shadow_paths.append(plugin.path)
 
-    return plugin_names
+            if shadowed in (True, None):
+                _plugins.append(plugin)
+        else:
+            if shadowed in (False, None):
+                _plugins.append(plugin)
+
+            existing_plugins[plugin.name] = plugin
+
+    return _plugins
 
 
 def _iter_plugin_metadata_files(root_dir=None, strict=False):
@@ -583,24 +668,25 @@ def _iter_plugin_metadata_files(root_dir=None, strict=False):
                 break
 
 
-def _get_plugin(name, enabled=None, check_for_duplicates=True):
-    plugin = None
-    for _plugin in _list_plugins(enabled=enabled):
-        if _plugin.name == name:
-            if check_for_duplicates and plugin is not None:
-                raise ValueError(f"Multiple plugins found with name '{name}'")
+def _get_plugin(name, enabled=None, builtin=None):
+    for plugin in _list_plugins(
+        enabled=enabled, builtin=builtin, shadowed=False
+    ):
+        if plugin.name == name:
+            return plugin
 
-            plugin = _plugin
-
-    if plugin is None:
-        raise ValueError(f"Plugin '{name}' not found")
-
-    return plugin
+    raise ValueError(f"Plugin '{name}' not found")
 
 
-def _load_plugin_definition(plugin):
-    metadata_path = _find_plugin_metadata_file(plugin.path)
-    return PluginDefinition.from_disk(metadata_path)
+def _load_plugin_definition(plugin=None, plugin_dir=None):
+    if plugin is not None:
+        plugin_dir = plugin.path
+        shadow_paths = plugin.shadow_paths
+    else:
+        shadow_paths = None
+
+    metadata_path = _find_plugin_metadata_file(plugin_dir)
+    return PluginDefinition.from_disk(metadata_path, shadow_paths=shadow_paths)
 
 
 def _list_disabled_plugins():
@@ -651,9 +737,6 @@ def _recommend_label(name):
 
 
 def _update_plugin_settings(plugin_name, enabled=None, delete=False, **kwargs):
-    # This would ensure that the plugin actually exists
-    # _get_plugin(plugin_name)
-
     # Plugins are enabled by default, so if we can't read the App config or it
     # doesn't exist, don't do anything
     okay_missing = enabled in (True, None) and not kwargs
@@ -692,7 +775,7 @@ def _update_plugin_settings(plugin_name, enabled=None, delete=False, **kwargs):
         plugin_settings = plugins[plugin_name]
 
         if enabled in (True, None):
-            # Plugins are enabled by default, so just remove the entry altogether
+            # Plugins are enabled by default, so just remove entry altogether
             plugin_settings.pop("enabled", None)
             if not plugin_settings:
                 plugins.pop(plugin_name)

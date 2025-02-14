@@ -1,7 +1,7 @@
 """
 FiftyOne Server aggregations
 
-| Copyright 2017-2024, Voxel51, Inc.
+| Copyright 2017-2025, Voxel51, Inc.
 | `voxel51.com <https://voxel51.com/>`_
 |
 """
@@ -126,10 +126,6 @@ async def aggregate_resolver(
 
     if form.sample_ids:
         view = fov.make_optimized_select_view(view, form.sample_ids)
-
-    if form.mixed and view.media_type == fom.GROUP and view.group_slices:
-        view = view.select_group_slices(_force_mixed=True)
-        view = fosv.get_extended_view(view, form.filters)
 
     if form.hidden_labels:
         view = view.exclude_labels(
